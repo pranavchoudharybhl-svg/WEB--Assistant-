@@ -1,0 +1,116 @@
+name: Multi-Platform AI Release Builder
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: WEB_AI_OS-windows-x64.zip
+            binary_name: WEB_AI_OS.exe
+            target_os: windows
+          - os: ubuntu-latest
+            artifact_name: WEB_AI_OS-linux-x64.tar.gz
+            binary_name: WEB_AI_OS
+            target_os: linux
+          - os: macos-latest
+            artifact_name: WEB_AI_OS-macos-x64.zip
+            binary_name: WEB_AI_OS
+            target_os: macos
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Executable with PyInstaller
+        run: |
+          pyinstaller WEB_AI_OS.spec --clean --noconfirm
+
+      - name: Package Windows Release (Zip)
+        if: matrix.target_os == 'windows'
+        shell: pwsh
+        run: |
+          mkdir release-pkg
+          Copy-Item dist/WEB_AI_OS.exe release-pkg/
+          Copy-Item .env.example release-pkg/
+          Copy-Item README.md release-pkg/
+          Copy-Item LICENSE release-pkg/
+          Compress-Archive -Path release-pkg/* -DestinationPath ${{ matrix.artifact_name }}
+
+      - name: Package Linux Release (Tar.gz)
+        if: matrix.target_os == 'linux'
+        run: |
+          mkdir release-pkg
+          cp dist/WEB_AI_OS release-pkg/
+          cp .env.example release-pkg/
+          cp README.md release-pkg/
+          cp LICENSE release-pkg/
+          chmod +x release-pkg/WEB_AI_OS
+          tar -czvf ${{ matrix.artifact_name }} -C release-pkg .
+
+      - name: Package macOS Release (Zip)
+        if: matrix.target_os == 'macos'
+        run: |
+          mkdir release-pkg
+          cp dist/WEB_AI_OS release-pkg/
+          cp .env.example release-pkg/
+          cp README.md release-pkg/
+          cp LICENSE release-pkg/
+          chmod +x release-pkg/WEB_AI_OS
+          cd release-pkg && zip -r ../${{ matrix.artifact_name }} .
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_name }}
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          name: "WEB AI Assistant ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
